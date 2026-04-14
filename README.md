@@ -19,7 +19,6 @@ lazy.nvim:
 {
   "thobiasn/claudediff.nvim",
   dependencies = { "coder/claudecode.nvim" },
-  config = true,
 }
 ```
 
