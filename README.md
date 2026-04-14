@@ -74,6 +74,10 @@ The rest of the design is standard Neovim:
 
 No global state. No new commands. No windows or tabs created beyond focusing an existing editor window (or splitting if none exists).
 
+## Known quirks
+
+- **Crash during review**: if Neovim dies mid-diff, the swap file will record the proposed content as an unsaved edit against disk. On recovery, `:w` accepts that content, `:e!` discards. No lingering plugin state — the patch is in-memory only.
+
 ## What this plugin will not do
 
 - Modify claudecode's protocol, WebSocket, or tool-call handling
