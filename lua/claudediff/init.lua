@@ -1,12 +1,5 @@
 local M = {}
 
-M.config = {
-  keymaps = {
-    accept = "<leader>ya",
-    reject = "<leader>yn",
-  },
-}
-
 local function apply_patch(notify_on_fail)
   local ok, diff = pcall(require, "claudecode.diff")
   if not ok or type(diff) ~= "table" then
@@ -15,14 +8,11 @@ local function apply_patch(notify_on_fail)
     end
     return false
   end
-  diff.open_diff_blocking = require("claudediff.renderer").make_open_diff_blocking(diff, M.config)
+  diff.open_diff_blocking = require("claudediff.renderer").make_open_diff_blocking(diff)
   return true
 end
 
-function M.setup(opts)
-  if opts then
-    M.config = vim.tbl_deep_extend("force", M.config, opts)
-  end
+function M.setup()
   if apply_patch(false) then
     return
   end

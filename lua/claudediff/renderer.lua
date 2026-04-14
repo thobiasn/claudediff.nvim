@@ -16,8 +16,20 @@ local function is_buffer_dirty(path)
   return false
 end
 
-local function make_resolution_callback(co)
+local function is_file_saved(result)
+  return type(result) == "table"
+    and type(result.content) == "table"
+    and type(result.content[1]) == "table"
+    and result.content[1].text == "FILE_SAVED"
+end
+
+local function make_resolution_callback(co, on_resolve)
+  local fired = false
   return function(result)
+    if not fired then
+      fired = true
+      pcall(on_resolve, is_file_saved(result))
+    end
     local resumed_ok, resumed = coroutine.resume(co, result)
     local co_key = tostring(co)
     local responses = rawget(_G, "claude_deferred_responses")
@@ -145,11 +157,9 @@ local function render_overlay(buf, ns, old_lines, hunks)
   end
 end
 
-local function clear_diff_ui(buf, ns, keymaps, autocmd_ids, original_buftype)
+local function clear_diff_ui(buf, ns, autocmd_ids, original_buftype)
   if vim.api.nvim_buf_is_valid(buf) then
     pcall(vim.api.nvim_buf_clear_namespace, buf, ns, 0, -1)
-    pcall(vim.keymap.del, "n", keymaps.accept, { buffer = buf })
-    pcall(vim.keymap.del, "n", keymaps.reject, { buffer = buf })
     if original_buftype ~= nil then
       pcall(vim.api.nvim_set_option_value, "buftype", original_buftype, { buf = buf })
     end
@@ -173,7 +183,7 @@ local function restore_buffer(file_buf, is_new_file)
   end
 end
 
-function M.make_open_diff_blocking(diff, config)
+function M.make_open_diff_blocking(diff)
   return function(old_file_path, new_file_path, new_file_contents, tab_name)
     local co, is_main = coroutine.running()
     if not co or is_main then
@@ -208,52 +218,38 @@ function M.make_open_diff_blocking(diff, config)
 
     local original_buftype = vim.api.nvim_get_option_value("buftype", { buf = file_buf })
     local ns = vim.api.nvim_create_namespace("claudediff/" .. tab_name)
-    local keymaps = config.keymaps
     local autocmd_ids = {}
-    local resolved = false
+    local wiping = false
 
-    local function resolve_once(fn)
-      if resolved then
+    -- Teardown runs from the resolution_callback, so it fires exactly once
+    -- regardless of who triggered resolution (:w, buffer close, Claude prompt,
+    -- upstream forced-cleanup, etc.).
+    local function teardown(accepted)
+      clear_diff_ui(file_buf, ns, autocmd_ids, original_buftype)
+      if wiping then
         return
       end
-      resolved = true
-      fn()
-    end
-
-    local function accept_via_write()
-      resolve_once(function()
+      if accepted then
         pcall(vim.api.nvim_set_option_value, "modified", false, { buf = file_buf })
-        clear_diff_ui(file_buf, ns, keymaps, autocmd_ids, original_buftype)
-        pcall(diff._resolve_diff_as_saved, tab_name, file_buf)
-      end)
-    end
-
-    local function accept()
-      if resolved or not vim.api.nvim_buf_is_valid(file_buf) then
-        return accept_via_write()
-      end
-      vim.api.nvim_buf_call(file_buf, function()
-        vim.cmd("silent! write")
-      end)
-    end
-
-    local function reject()
-      resolve_once(function()
-        clear_diff_ui(file_buf, ns, keymaps, autocmd_ids, original_buftype)
+      else
         restore_buffer(file_buf, is_new_file)
-        pcall(diff._resolve_diff_as_rejected, tab_name)
+      end
+      -- Claude may write the file after resolving (common for external accept).
+      -- checktime silently reloads if disk moved on the same tick; otherwise
+      -- nvim's autoread picks it up on the next BufEnter/FocusGained.
+      pcall(vim.api.nvim_set_option_value, "autoread", true, { buf = file_buf })
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(file_buf) then
+          pcall(vim.api.nvim_buf_call, file_buf, function()
+            vim.cmd("silent! checktime")
+          end)
+        end
       end)
     end
 
-    local function reject_from_wipe()
-      resolve_once(function()
-        pcall(diff._resolve_diff_as_rejected, tab_name)
-      end)
-    end
-
-    -- Apply content + install UI atomically. On failure, unwind so we never leave the
-    -- user's file buffer in a half-patched state (acwrite without handlers, partial
-    -- extmarks, etc.).
+    -- Apply content + install handlers atomically. On failure, unwind so we never
+    -- leave the user's buffer in a half-patched state (acwrite without handlers,
+    -- partial extmarks, etc.).
     local setup_ok, setup_err = pcall(function()
       vim.api.nvim_buf_set_lines(file_buf, 0, -1, false, lines_for_set(new_file_contents))
       -- acwrite so `:w` hits our BufWriteCmd — we do NOT touch disk; Claude does.
@@ -263,17 +259,15 @@ function M.make_open_diff_blocking(diff, config)
         render_overlay(file_buf, ns, old_lines, hunks)
       end
 
-      local opts = { buffer = file_buf, silent = true, nowait = true }
-      vim.keymap.set("n", keymaps.accept, accept, vim.tbl_extend("force", opts, { desc = "Accept Claude diff" }))
-      vim.keymap.set("n", keymaps.reject, reject, vim.tbl_extend("force", opts, { desc = "Reject Claude diff" }))
-
       local group = vim.api.nvim_create_augroup("claudediff/" .. tab_name, { clear = true })
       table.insert(
         autocmd_ids,
         vim.api.nvim_create_autocmd("BufWriteCmd", {
           group = group,
           buffer = file_buf,
-          callback = accept_via_write,
+          callback = function()
+            pcall(diff._resolve_diff_as_saved, tab_name, file_buf)
+          end,
         })
       )
       table.insert(
@@ -281,7 +275,10 @@ function M.make_open_diff_blocking(diff, config)
         vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
           group = group,
           buffer = file_buf,
-          callback = reject_from_wipe,
+          callback = function()
+            wiping = true
+            pcall(diff._resolve_diff_as_rejected, tab_name)
+          end,
         })
       )
 
@@ -293,13 +290,13 @@ function M.make_open_diff_blocking(diff, config)
         autocmd_ids = autocmd_ids,
         created_at = vim.fn.localtime(),
         status = "pending",
-        resolution_callback = make_resolution_callback(co),
+        resolution_callback = make_resolution_callback(co, teardown),
         is_new_file = is_new_file,
       })
     end)
 
     if not setup_ok then
-      clear_diff_ui(file_buf, ns, keymaps, autocmd_ids, original_buftype)
+      clear_diff_ui(file_buf, ns, autocmd_ids, original_buftype)
       restore_buffer(file_buf, is_new_file)
       if type(setup_err) == "table" then
         error(setup_err)

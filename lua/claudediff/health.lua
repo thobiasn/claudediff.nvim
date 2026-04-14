@@ -36,13 +36,6 @@ function M.check()
     )
   end
 
-  local claudediff = require("claudediff")
-  local k = claudediff.config.keymaps
-  if k and k.accept and k.reject then
-    vim.health.ok(("keymaps: accept=%s reject=%s"):format(k.accept, k.reject))
-  else
-    vim.health.warn("keymaps not configured — did setup() run?")
-  end
 end
 
 return M

@@ -17,9 +17,9 @@ lazy.nvim:
 
 ```lua
 {
-  "<you>/claudediff.nvim",
+  "thobiasn/claudediff.nvim",
   dependencies = { "coder/claudecode.nvim" },
-  opts = {},
+  config = true,
 }
 ```
 
@@ -27,26 +27,13 @@ packer:
 
 ```lua
 use {
-  "<you>/claudediff.nvim",
+  "thobiasn/claudediff.nvim",
   requires = "coder/claudecode.nvim",
   config = function() require("claudediff").setup() end,
 }
 ```
 
-## Configuration
-
-Defaults:
-
-```lua
-require("claudediff").setup({
-  keymaps = {
-    accept = "<leader>ya",
-    reject = "<leader>yn",
-  },
-})
-```
-
-Keymaps are buffer-local to the file being diffed and active only while a proposal is pending.
+No configuration. `setup()` takes no arguments — it just installs the patch.
 
 ## Usage
 
@@ -54,11 +41,10 @@ When Claude proposes an edit:
 
 1. The target file opens (or gets focused) in an editor window.
 2. Proposed content is applied to the buffer. Removed lines render as red `virt_lines`; added lines are tinted green.
-3. Accept: `<leader>ya` or `:w` — Claude writes the file to disk.
-4. Reject: `<leader>yn` — buffer reloads from disk.
-5. Closing the buffer (`:bd`, `:bw`, bufferline close) counts as reject.
+3. **Accept**: `:w` (or respond yes in the Claude prompt) — Claude writes the file to disk.
+4. **Reject**: close the buffer (`:bd`, `:bw`, bufferline close, or respond no in the Claude prompt) — buffer reloads from disk.
 
-Editing the proposal before accepting is supported — save-with-edits is a valid workflow.
+Editing the proposal before saving is supported — `:w` persists your edits as the final content.
 
 ## Health check
 
