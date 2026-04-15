@@ -118,7 +118,10 @@ local function render_overlay(buf, ns, old_lines, hunks)
       local removed = {}
       for i = 0, count_a - 1 do
         local text = old_lines[start_a + i] or ""
-        table.insert(removed, { { "- " .. text, "DiffDelete" } })
+        table.insert(removed, {
+          { text, "DiffDelete" },
+          { string.rep(" ", 500), "DiffDelete" },
+        })
       end
 
       local anchor, above
